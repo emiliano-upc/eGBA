@@ -1,8 +1,11 @@
 package com.example.egba
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.os.Build
+import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.KeyEvent
 import android.view.View
@@ -24,8 +27,15 @@ class RetroPlatformView(private val activity: MainActivity, rom: String) : Platf
     private val retroView: GLRetroView
 
     init {
+        val core = File(activity.applicationInfo.nativeLibraryDir, "libmgba_libretro_android.so")
+        if (!core.exists()) {
+            throw IllegalStateException("No se encontró el motor: " + core.absolutePath)
+        }
+        if (!File(rom).exists()) {
+            throw IllegalStateException("No se encontró la ROM: $rom")
+        }
         val data = GLRetroViewData(activity).apply {
-            coreFilePath = activity.applicationInfo.nativeLibraryDir + "/libmgba_libretro_android.so"
+            coreFilePath = core.absolutePath
             gameFilePath = rom
             systemDirectory = File(activity.filesDir, "system").apply { mkdirs() }.absolutePath
             savesDirectory = File(activity.filesDir, "saves").apply { mkdirs() }.absolutePath
@@ -54,6 +64,21 @@ class RetroViewFactory(private val activity: MainActivity) :
 class MainActivity : FlutterActivity() {
     private var pendingPick: MethodChannel.Result? = null
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // Guarda el motivo si la app se cierra por un error.
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                File(filesDir, "crash.txt").writeText(
+                    "Hilo: " + t.name + "\n" + android.util.Log.getStackTraceString(e)
+                )
+            } catch (_: Exception) {
+            }
+            previous?.uncaughtException(t, e)
+        }
+        super.onCreate(savedInstanceState)
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -65,6 +90,7 @@ class MainActivity : FlutterActivity() {
                 val v = Retro.view
                 when (call.method) {
                     "pickRom" -> pickRom(result)
+                    "getLastCrash" -> result.success(readLastCrash())
                     "setKey" -> {
                         val code = keyCode(call.argument<String>("key"))
                         val pressed = call.argument<Boolean>("pressed") == true
@@ -96,6 +122,42 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    private fun readLastCrash(): String? {
+        val sb = StringBuilder()
+        val f = File(filesDir, "crash.txt")
+        if (f.exists()) {
+            sb.append(f.readText().take(3000))
+            f.delete()
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                val last = am.getHistoricalProcessExitReasons(packageName, 0, 1).firstOrNull()
+                if (last != null) {
+                    val prefs = getSharedPreferences("egba", Context.MODE_PRIVATE)
+                    if (prefs.getLong("last_exit_ts", 0L) != last.timestamp) {
+                        prefs.edit().putLong("last_exit_ts", last.timestamp).apply()
+                        val name = when (last.reason) {
+                            2 -> "cerrada por una señal del sistema"
+                            3 -> "poca memoria"
+                            4 -> "error de la app (Java/Kotlin)"
+                            5 -> "error nativo (probablemente el motor)"
+                            6 -> "la app dejó de responder"
+                            else -> null
+                        }
+                        if (name != null) {
+                            sb.append("\nÚltimo cierre: ").append(name)
+                            sb.append(" [código ").append(last.reason).append("]")
+                            sb.append(" ").append(last.description ?: "")
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        return if (sb.isEmpty()) null else sb.toString()
     }
 
     private fun keyCode(k: String?): Int? = when (k) {
