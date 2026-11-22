@@ -21,7 +21,7 @@ jobs:
           channel: stable
 
       - name: Crear proyecto base
-        run: flutter create --platforms=android --project-name gba_app app
+        run: flutter create --platforms=android --project-name egba app
 
       - name: Copiar tu código
         run: |
@@ -29,10 +29,8 @@ jobs:
           rm -rf app/lib
           cp -r lib app/lib
 
-      - name: Subir compileSdk a 36
-        run: |
-          sed -i -E 's/compileSdk(Version)?( =)? *flutter\.compileSdkVersion/compileSdk = 36/' app/android/app/build.gradle*
-          grep -n compileSdk app/android/app/build.gradle*
+      - name: Poner nombre eGBA a la app
+        run: sed -i 's/android:label="[^"]*"/android:label="eGBA"/' app/android/app/src/main/AndroidManifest.xml
 
       - name: Compilar
         working-directory: app
@@ -42,5 +40,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: gba-apk
+          name: egba-apk
           path: app/build/app/outputs/flutter-apk/app-release.apk
