@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -14,13 +16,11 @@ Future<void> main() async {
   ));
 }
 
-/// Puente con el núcleo de emulación (mGBA) del lado nativo.
-/// Mientras el lado nativo no exista, los errores se ignoran y la UI funciona igual.
+/// Puente con el lado nativo (LibretroDroid + mGBA).
 class EmulatorBridge {
   static const _ch = MethodChannel('gba/emulator');
 
-  static Future<int?> loadRom(String path) =>
-      _call<int>('loadRom', {'path': path}); // devuelve el id de textura
+  static Future<String?> pickRom() => _call<String>('pickRom');
   static Future<void> setKey(String key, bool pressed) =>
       _call('setKey', {'key': key, 'pressed': pressed});
   static Future<void> reset() => _call('reset');
@@ -47,20 +47,47 @@ class GbaPage extends StatefulWidget {
 }
 
 class _GbaPageState extends State<GbaPage> {
-  int? textureId;
+  String? romPath;
   bool menuOpen = false;
   bool controlsVisible = true;
   bool fastForward = false;
 
   Future<void> _openRom() async {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Todavía no hay emulador conectado')),
-    );
+    final path = await EmulatorBridge.pickRom();
+    if (path == null) return;
+    setState(() => romPath = path);
   }
 
   void _toggleFF() {
     setState(() => fastForward = !fastForward);
     EmulatorBridge.setFastForward(fastForward);
+  }
+
+  Widget _gameView(String rom) {
+    const viewType = 'egba/retro_view';
+    return PlatformViewLink(
+      key: ValueKey(rom),
+      viewType: viewType,
+      surfaceFactory: (context, controller) {
+        return AndroidViewSurface(
+          controller: controller as AndroidViewController,
+          gestureRecognizers: const <Factory<OneSequenceGestureRecognizer>>{},
+          hitTestBehavior: PlatformViewHitTestBehavior.transparent,
+        );
+      },
+      onCreatePlatformView: (params) {
+        return PlatformViewsService.initExpensiveAndroidView(
+          id: params.id,
+          viewType: viewType,
+          layoutDirection: TextDirection.ltr,
+          creationParams: {'rom': rom},
+          creationParamsCodec: const StandardMessageCodec(),
+          onFocus: () => params.onFocusChanged(true),
+        )
+          ..addOnPlatformViewCreatedListener(params.onPlatformViewCreated)
+          ..create();
+      },
+    );
   }
 
   @override
@@ -85,8 +112,8 @@ class _GbaPageState extends State<GbaPage> {
           Center(
             child: AspectRatio(
               aspectRatio: 3 / 2,
-              child: textureId != null
-                  ? Texture(textureId: textureId!)
+              child: romPath != null
+                  ? _gameView(romPath!)
                   : Center(
                       child: OutlinedButton(
                         onPressed: _openRom,
@@ -110,7 +137,7 @@ class _GbaPageState extends State<GbaPage> {
             key('Select', 'select', 1333, 405, 32),
           ],
 
-          // Avance rápido (como en Kirin).
+          // Avance rápido (mantener apretado).
           Positioned(
             left: 1462 / 1600 * w - 32 / 720 * h,
             top: 314 / 720 * h - 32 / 720 * h,
@@ -152,7 +179,7 @@ class _GbaPageState extends State<GbaPage> {
       (Icons.upload_file, EmulatorBridge.loadState),
       (Icons.edit, () {}), // editar posición/tamaño de botones (pendiente)
       (Icons.settings, () {}), // ajustes (pendiente)
-      (Icons.info_outline, () {}), // info (pendiente)
+      (Icons.folder_open, _openRom),
       (Icons.gamepad, () => setState(() => controlsVisible = !controlsVisible)),
       (Icons.fast_forward, _toggleFF),
     ];
