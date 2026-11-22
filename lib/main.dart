@@ -22,6 +22,7 @@ class EmulatorBridge {
   static const _ch = MethodChannel('gba/emulator');
 
   static Future<String?> pickRom() => _call<String>('pickRom');
+  static Future<String?> getLastCrash() => _call<String>('getLastCrash');
   static Future<void> setKey(String key, bool pressed) =>
       _call('setKey', {'key': key, 'pressed': pressed});
   static Future<void> reset() => _call('reset');
@@ -52,6 +53,29 @@ class _GbaPageState extends State<GbaPage> {
   bool menuOpen = false;
   bool controlsVisible = true;
   bool fastForward = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _checkCrash());
+  }
+
+  Future<void> _checkCrash() async {
+    final report = await EmulatorBridge.getLastCrash();
+    if (report == null || !mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('La app se cerró la última vez'),
+        content: SingleChildScrollView(
+          child: SelectableText(report, style: const TextStyle(fontSize: 11)),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cerrar')),
+        ],
+      ),
+    );
+  }
 
   Future<void> _openRom() async {
     final path = await EmulatorBridge.pickRom();
