@@ -2,6 +2,7 @@ package com.example.egba
 
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -124,6 +125,38 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    // Saca del informe del sistema las líneas de texto útiles (señal, hilo, librerías).
+    private fun tombstoneLines(info: ApplicationExitInfo): String {
+        return try {
+            val bytes = info.traceInputStream?.use { it.readBytes() } ?: return ""
+            val lines = ArrayList<String>()
+            val run = StringBuilder()
+            for (b in bytes) {
+                val c = b.toInt() and 0xFF
+                if (c in 32..126) {
+                    run.append(c.toChar())
+                } else {
+                    if (run.length >= 5) lines.add(run.toString())
+                    run.setLength(0)
+                }
+            }
+            if (run.length >= 5) lines.add(run.toString())
+            lines
+                .filter { l ->
+                    l.contains("signal", true) || l.contains("SIG") || l.contains(".so") ||
+                        l.contains("abort", true) || l.contains("fault", true) ||
+                        l.contains("Thread", true) || l.contains("GL") ||
+                        l.contains("retro", true) || l.contains("mgba", true) ||
+                        l.contains("libc")
+                }
+                .distinct()
+                .take(25)
+                .joinToString("\n") { it.take(110) }
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
     private fun readLastCrash(): String? {
         val sb = StringBuilder()
         val f = File(filesDir, "crash.txt")
@@ -151,6 +184,12 @@ class MainActivity : FlutterActivity() {
                             sb.append("\nÚltimo cierre: ").append(name)
                             sb.append(" [código ").append(last.reason).append("]")
                             sb.append(" ").append(last.description ?: "")
+                            sb.append("\nAndroid ").append(Build.VERSION.RELEASE)
+                            sb.append(" / ").append(Build.SUPPORTED_ABIS.joinToString(","))
+                            if (last.reason == 5) {
+                                val t = tombstoneLines(last)
+                                if (t.isNotEmpty()) sb.append("\n\n").append(t)
+                            }
                         }
                     }
                 }
