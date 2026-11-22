@@ -1,4 +1,3 @@
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -54,11 +53,9 @@ class _GbaPageState extends State<GbaPage> {
   bool fastForward = false;
 
   Future<void> _openRom() async {
-    final res = await FilePicker.platform.pickFiles();
-    final path = res?.files.single.path;
-    if (path == null) return;
-    final id = await EmulatorBridge.loadRom(path);
-    setState(() => textureId = id);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Todavía no hay emulador conectado')),
+    );
   }
 
   void _toggleFF() {
