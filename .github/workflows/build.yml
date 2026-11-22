@@ -28,15 +28,44 @@ jobs:
           cp pubspec.yaml app/pubspec.yaml
           rm -rf app/lib
           cp -r lib app/lib
+          cp android_src/MainActivity.kt app/android/app/src/main/kotlin/com/example/egba/MainActivity.kt
 
       - name: Poner nombre eGBA a la app
         run: sed -i 's/android:label="[^"]*"/android:label="eGBA"/' app/android/app/src/main/AndroidManifest.xml
+
+      - name: Agregar LibretroDroid
+        working-directory: app/android
+        run: |
+          sed -i 's|mavenCentral()|mavenCentral()\n        maven { url = uri("https://jitpack.io") }|' build.gradle.kts
+          cat >> app/build.gradle.kts <<'EOF'
+
+          dependencies {
+              implementation("com.github.swordfish90:libretrodroid:0.14.0")
+          }
+
+          android {
+              packaging {
+                  jniLibs {
+                      useLegacyPackaging = true
+                  }
+              }
+          }
+          EOF
+          grep -n -A3 jitpack build.gradle.kts
+
+      - name: Descargar motor mGBA
+        run: |
+          mkdir -p app/android/app/src/main/jniLibs/arm64-v8a
+          curl -fL -o mgba.zip https://buildbot.libretro.com/nightly/android/latest/arm64-v8a/mgba_libretro_android.so.zip
+          unzip -o mgba.zip -d core_tmp
+          cp core_tmp/mgba_libretro_android.so app/android/app/src/main/jniLibs/arm64-v8a/libmgba_libretro_android.so
+          ls -l app/android/app/src/main/jniLibs/arm64-v8a/
 
       - name: Compilar
         working-directory: app
         run: |
           flutter pub get
-          flutter build apk --release
+          flutter build apk --release --target-platform android-arm64
 
       - uses: actions/upload-artifact@v4
         with:
