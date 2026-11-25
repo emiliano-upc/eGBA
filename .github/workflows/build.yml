@@ -65,7 +65,7 @@ jobs:
         working-directory: app
         run: |
           flutter pub get
-          flutter build apk --release --target-platform android-arm64
+          flutter build apk --release --no-shrink --target-platform android-arm64
 
       - uses: actions/upload-artifact@v4
         with:
