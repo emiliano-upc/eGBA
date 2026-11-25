@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -42,6 +45,62 @@ class EmulatorBridge {
   }
 }
 
+// ---------- Diseño de los botones (medidas de referencia 1600x720, como Kirin) ----------
+
+class Spec {
+  final double x, y, r;
+  const Spec(this.x, this.y, this.r);
+}
+
+const Map<String, Spec> kDefaults = {
+  'dpad': Spec(248, 554, 114),
+  'a': Spec(1238, 552, 78),
+  'b': Spec(1408, 595, 66),
+  'l': Spec(1108, 616, 42),
+  'r': Spec(1428, 467, 32),
+  'start': Spec(1238, 405, 32),
+  'select': Spec(1333, 405, 32),
+  'ff': Spec(1462, 314, 32),
+};
+
+const Map<String, String> kNames = {
+  'dpad': 'Cruceta',
+  'a': 'A',
+  'b': 'B',
+  'l': 'L',
+  'r': 'R',
+  'start': 'Start',
+  'select': 'Select',
+  'ff': 'Avance rápido',
+};
+
+const Map<String, String> kLabels = {
+  'a': 'A',
+  'b': 'B',
+  'l': 'L',
+  'r': 'R',
+  'start': 'Start',
+  'select': 'Select',
+  'ff': '▶▶',
+};
+
+const List<String> kStepNames = ['SM', 'MD', 'LG', 'XL', 'XXL'];
+const List<double> kStepMul = [0.75, 1.0, 1.25, 1.5, 1.8];
+const List<String> kRound = ['a', 'b', 'l', 'r', 'start', 'select'];
+
+const Color kAccent = Color(0xFFB0214F);
+const Color kFfBlue = Color(0xFF4C8DFF);
+
+File? _settingsFile() {
+  try {
+    final dir = Directory('${Directory.systemTemp.parent.path}/files');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    return File('${dir.path}/egba_settings.json');
+  } catch (_) {
+    return null;
+  }
+}
+
 class GbaPage extends StatefulWidget {
   const GbaPage({super.key});
   @override
@@ -53,12 +112,63 @@ class _GbaPageState extends State<GbaPage> {
   bool menuOpen = false;
   bool controlsVisible = true;
   bool fastForward = false;
+  bool editing = false;
+  String? selected;
+  double scale = 1.0;
+  double opacity = 1.0;
+  bool vibrate = true;
+  final Map<String, Offset> pos = {
+    for (final e in kDefaults.entries) e.key: Offset(e.value.x, e.value.y)
+  };
+  final Map<String, int> step = {for (final k in kDefaults.keys) k: 1};
 
   @override
   void initState() {
     super.initState();
+    _load();
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkCrash());
   }
+
+  // ---------- Guardado ----------
+
+  Future<void> _load() async {
+    try {
+      final f = _settingsFile();
+      if (f == null || !await f.exists()) return;
+      final m = jsonDecode(await f.readAsString()) as Map<String, dynamic>;
+      setState(() {
+        scale = ((m['scale'] ?? 1.0) as num).toDouble().clamp(0.4, 1.4).toDouble();
+        opacity = ((m['opacity'] ?? 1.0) as num).toDouble().clamp(0.0, 1.0).toDouble();
+        vibrate = (m['vibrate'] ?? true) as bool;
+        final items = (m['items'] ?? {}) as Map<String, dynamic>;
+        items.forEach((k, v) {
+          if (!kDefaults.containsKey(k)) return;
+          final it = v as Map<String, dynamic>;
+          pos[k] = Offset((it['x'] as num).toDouble(), (it['y'] as num).toDouble());
+          step[k] = ((it['s'] ?? 1) as num).toInt().clamp(0, kStepMul.length - 1).toInt();
+        });
+      });
+    } catch (_) {}
+  }
+
+  Future<void> _save() async {
+    try {
+      final f = _settingsFile();
+      if (f == null) return;
+      final data = {
+        'scale': scale,
+        'opacity': opacity,
+        'vibrate': vibrate,
+        'items': {
+          for (final k in kDefaults.keys)
+            k: {'x': pos[k]!.dx, 'y': pos[k]!.dy, 's': step[k]}
+        },
+      };
+      await f.writeAsString(jsonEncode(data));
+    } catch (_) {}
+  }
+
+  // ---------- Acciones ----------
 
   Future<void> _checkCrash() async {
     final report = await EmulatorBridge.getLastCrash();
@@ -87,6 +197,82 @@ class _GbaPageState extends State<GbaPage> {
     setState(() => fastForward = !fastForward);
     EmulatorBridge.setFastForward(fastForward);
   }
+
+  void _buzz() {
+    if (vibrate) HapticFeedback.selectionClick();
+  }
+
+  void _resetLayout() {
+    setState(() {
+      for (final e in kDefaults.entries) {
+        pos[e.key] = Offset(e.value.x, e.value.y);
+        step[e.key] = 1;
+      }
+    });
+    _save();
+  }
+
+  Future<void> _openSettings() async {
+    setState(() => menuOpen = false);
+    const label = TextStyle(color: Colors.white70, fontSize: 13);
+    await showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setD) {
+        void both(VoidCallback f) {
+          setState(f);
+          setD(() {});
+        }
+
+        return AlertDialog(
+          backgroundColor: const Color(0xFF16181D),
+          title: const Text('Configuración', style: TextStyle(color: Colors.white)),
+          content: SizedBox(
+            width: 380,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Escala del gamepad   ${(scale * 100).round()}%', style: label),
+                  Slider(
+                    value: scale,
+                    min: 0.4,
+                    max: 1.4,
+                    activeColor: kAccent,
+                    onChanged: (v) => both(() => scale = v),
+                  ),
+                  Text('Opacidad del gamepad   ${(opacity * 100).round()}%', style: label),
+                  Slider(
+                    value: opacity,
+                    min: 0.0,
+                    max: 1.0,
+                    activeColor: kAccent,
+                    onChanged: (v) => both(() => opacity = v),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Vibración de botones', style: label),
+                    value: vibrate,
+                    activeColor: kAccent,
+                    onChanged: (v) => both(() => vibrate = v),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cerrar', style: TextStyle(color: kAccent)),
+            ),
+          ],
+        );
+      }),
+    );
+    _save();
+  }
+
+  // ---------- Pantalla de juego ----------
 
   Widget _gameView(String rom) {
     const viewType = 'egba/retro_view';
@@ -122,13 +308,36 @@ class _GbaPageState extends State<GbaPage> {
       body: LayoutBuilder(builder: (context, c) {
         final w = c.maxWidth, h = c.maxHeight;
 
-        // Posiciona un círculo usando las proporciones de la pantalla de Kirin (1600x720).
-        Widget key(String label, String id, double x, double y, double r) {
-          final rr = r / 720 * h;
+        double rpx(String id) => kDefaults[id]!.r * kStepMul[step[id]!] * scale / 720 * h;
+        Offset center(String id) => Offset(pos[id]!.dx / 1600 * w, pos[id]!.dy / 720 * h);
+
+        // Coloca un botón; en modo edición se puede tocar para elegir y arrastrar para mover.
+        Widget placed(String id, Widget Function(double size) build) {
+          final r = rpx(id);
+          final ctr = center(id);
+          Widget inner = build(r * 2);
+          if (editing) {
+            inner = GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => selected = id),
+              onPanStart: (_) => setState(() => selected = id),
+              onPanUpdate: (d) => setState(() {
+                final p = pos[id]!;
+                pos[id] = Offset(
+                  (p.dx + d.delta.dx * 1600 / w).clamp(0.0, 1600.0).toDouble(),
+                  (p.dy + d.delta.dy * 720 / h).clamp(0.0, 720.0).toDouble(),
+                );
+              }),
+              onPanEnd: (_) => _save(),
+              child: inner,
+            );
+          }
           return Positioned(
-            left: x / 1600 * w - rr,
-            top: y / 720 * h - rr,
-            child: PadButton(label: label, size: rr * 2, onChange: (p) => EmulatorBridge.setKey(id, p)),
+            left: ctr.dx - r,
+            top: ctr.dy - r,
+            width: r * 2,
+            height: r * 2,
+            child: inner,
           );
         }
 
@@ -148,214 +357,22 @@ class _GbaPageState extends State<GbaPage> {
             ),
           ),
 
-          if (controlsVisible) ...[
-            Positioned(
-              left: 134 / 1600 * w,
-              top: 440 / 720 * h,
-              child: DPad(size: 228 / 720 * h),
+          if (controlsVisible || editing) ...[
+            placed(
+              'dpad',
+              (size) => editing
+                  ? DPadFace(size: size, opacity: opacity, selected: selected == 'dpad')
+                  : DPad(size: size, opacity: opacity, onDown: _buzz),
             ),
-            key('A', 'a', 1238, 552, 78),
-            key('B', 'b', 1408, 595, 66),
-            key('L', 'l', 1108, 616, 42),
-            key('R', 'r', 1428, 467, 32),
-            key('Start', 'start', 1238, 405, 32),
-            key('Select', 'select', 1333, 405, 32),
-          ],
-
-          // Avance rápido (mantener apretado).
-          Positioned(
-            left: 1462 / 1600 * w - 32 / 720 * h,
-            top: 314 / 720 * h - 32 / 720 * h,
-            child: PadButton(
-              label: '▶▶',
-              size: 64 / 720 * h,
-              onChange: EmulatorBridge.setFastForward,
-            ),
-          ),
-
-          // Menú arriba a la derecha.
-          Positioned(
-            top: 12,
-            right: 12,
-            child: menuOpen ? _expandedMenu() : _menuButton(Icons.apps, () => setState(() => menuOpen = true)),
-          ),
-        ]);
-      }),
-    );
-  }
-
-  Widget _menuButton(IconData icon, VoidCallback onTap, {Color? color}) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 54,
-        height: 54,
-        margin: const EdgeInsets.all(4),
-        decoration: const BoxDecoration(color: Color(0xCC2A2D33), shape: BoxShape.circle),
-        child: Icon(icon, color: color ?? Colors.white70, size: 26),
-      ),
-    );
-  }
-
-  Widget _expandedMenu() {
-    final items = <(IconData, VoidCallback)>[
-      (Icons.restart_alt, EmulatorBridge.reset),
-      (Icons.save_alt, EmulatorBridge.saveState),
-      (Icons.upload_file, EmulatorBridge.loadState),
-      (Icons.edit, () {}), // editar posición/tamaño de botones (pendiente)
-      (Icons.settings, () {}), // ajustes (pendiente)
-      (Icons.folder_open, _openRom),
-      (Icons.gamepad, () => setState(() => controlsVisible = !controlsVisible)),
-      (Icons.fast_forward, _toggleFF),
-    ];
-    Widget row(int from) => Row(
-          children: [for (var i = from; i < from + 4; i++) _menuButton(items[i].$1, items[i].$2)],
-        );
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Column(children: [row(0), row(4)]),
-        IconButton(
-          icon: const Icon(Icons.chevron_right, color: Colors.white, size: 32),
-          onPressed: () => setState(() => menuOpen = false),
-        ),
-      ],
-    );
-  }
-}
-
-/// Botón circular con contorno fino y sin relleno. Soporta multitoque.
-class PadButton extends StatefulWidget {
-  final String label;
-  final double size;
-  final ValueChanged<bool> onChange;
-  const PadButton({super.key, required this.label, required this.size, required this.onChange});
-  @override
-  State<PadButton> createState() => _PadButtonState();
-}
-
-class _PadButtonState extends State<PadButton> {
-  bool down = false;
-  void _set(bool v) {
-    if (down == v) return;
-    setState(() => down = v);
-    widget.onChange(v);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: (_) => _set(true),
-      onPointerUp: (_) => _set(false),
-      onPointerCancel: (_) => _set(false),
-      child: Container(
-        width: widget.size,
-        height: widget.size,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: down ? Colors.white.withOpacity(0.15) : Colors.transparent,
-          border: Border.all(color: Colors.white.withOpacity(0.35), width: 1),
-        ),
-        child: Text(widget.label,
-            style: TextStyle(color: Colors.white.withOpacity(0.5), fontSize: widget.size * 0.28)),
-      ),
-    );
-  }
-}
-
-/// Cruceta en forma de cruz. Deslizar el dedo cambia la dirección; admite diagonales.
-class DPad extends StatefulWidget {
-  final double size;
-  const DPad({super.key, required this.size});
-  @override
-  State<DPad> createState() => _DPadState();
-}
-
-class _DPadState extends State<DPad> {
-  final Set<String> _down = {};
-
-  void _update(Offset p) {
-    final c = widget.size / 2;
-    final dx = p.dx - c, dy = p.dy - c;
-    final dead = widget.size * 0.12;
-    final now = <String>{
-      if (dx < -dead) 'left',
-      if (dx > dead) 'right',
-      if (dy < -dead) 'up',
-      if (dy > dead) 'down',
-    };
-    for (final k in _down.difference(now)) {
-      EmulatorBridge.setKey(k, false);
-    }
-    for (final k in now.difference(_down)) {
-      EmulatorBridge.setKey(k, true);
-    }
-    setState(() {
-      _down
-        ..clear()
-        ..addAll(now);
-    });
-  }
-
-  void _release() => _update(Offset(widget.size / 2, widget.size / 2));
-
-  @override
-  Widget build(BuildContext context) {
-    return Listener(
-      onPointerDown: (e) => _update(e.localPosition),
-      onPointerMove: (e) => _update(e.localPosition),
-      onPointerUp: (_) => _release(),
-      onPointerCancel: (_) => _release(),
-      child: SizedBox(
-        width: widget.size,
-        height: widget.size,
-        child: CustomPaint(painter: _DPadPainter(_down)),
-      ),
-    );
-  }
-}
-
-class _DPadPainter extends CustomPainter {
-  final Set<String> pressed;
-  _DPadPainter(this.pressed);
-
-  @override
-  void paint(Canvas canvas, Size s) {
-    final a = s.width / 3; // ancho de cada brazo
-    final r = Radius.circular(a * 0.12);
-    final path = Path()
-      ..addRRect(RRect.fromRectAndRadius(Rect.fromLTWH(a, 0, a, s.height), r))
-      ..addRRect(RRect.fromRectAndRadius(Rect.fromLTWH(0, a, s.width, a), r));
-    final stroke = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1
-      ..color = Colors.white.withOpacity(0.35);
-    canvas.drawPath(path, stroke);
-
-    final fill = Paint()..color = Colors.white.withOpacity(0.15);
-    if (pressed.contains('up')) canvas.drawRect(Rect.fromLTWH(a, 0, a, a), fill);
-    if (pressed.contains('down')) canvas.drawRect(Rect.fromLTWH(a, 2 * a, a, a), fill);
-    if (pressed.contains('left')) canvas.drawRect(Rect.fromLTWH(0, a, a, a), fill);
-    if (pressed.contains('right')) canvas.drawRect(Rect.fromLTWH(2 * a, a, a, a), fill);
-
-    final arrow = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..color = Colors.white.withOpacity(0.5);
-    final m = a * 0.18;
-    void chevron(Offset c, double dx, double dy) {
-      canvas.drawLine(c + Offset(-dy * m - dx * m, dx * m - dy * m), c, arrow);
-      canvas.drawLine(c + Offset(dy * m - dx * m, -dx * m - dy * m), c, arrow);
-    }
-
-    chevron(Offset(1.5 * a, 0.5 * a), 0, -1);
-    chevron(Offset(1.5 * a, 2.5 * a), 0, 1);
-    chevron(Offset(0.5 * a, 1.5 * a), -1, 0);
-    chevron(Offset(2.5 * a, 1.5 * a), 1, 0);
-  }
-
-  @override
-  bool shouldRepaint(_DPadPainter old) => old.pressed.length != pressed.length || !old.pressed.containsAll(pressed);
-}
+            for (final id in kRound)
+              placed(
+                id,
+                (size) => editing
+                    ? ButtonFace(
+                        label: kLabels[id]!,
+                        size: size,
+                        opacity: opacity,
+                        selected: selected == id,
+                      )
+                    : PadButton(
+                        label: kLabels[id]!,
