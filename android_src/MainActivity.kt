@@ -125,7 +125,7 @@ class MainActivity : FlutterActivity() {
             }
     }
 
-    // Saca del informe del sistema las líneas de texto útiles (señal, hilo, librerías).
+    // Saca del informe del sistema las líneas útiles, descartando el ruido de Android.
     private fun tombstoneLines(info: ApplicationExitInfo): String {
         return try {
             val bytes = info.traceInputStream?.use { it.readBytes() } ?: return ""
@@ -136,24 +136,28 @@ class MainActivity : FlutterActivity() {
                 if (c in 32..126) {
                     run.append(c.toChar())
                 } else {
-                    if (run.length >= 5) lines.add(run.toString())
+                    if (run.length >= 4) lines.add(run.toString())
                     run.setLength(0)
                 }
             }
-            if (run.length >= 5) lines.add(run.toString())
+            if (run.length >= 4) lines.add(run.toString())
+
+            val noise = listOf(
+                "/apex/com.android.runtime", "libbinder", "libutils", "libandroid_runtime",
+                "art::", "libart.so", "libc++", "libgui", "boot.oat", "dalvik-cache",
+                "__pthread", "__start_thread", "java.lang.Thread", "android.os."
+            )
+            val useful = listOf(
+                "SEGV", "SIG", "dereference", "Cause", "abort", "Abort", ".so", "retro",
+                "mgba", "swordfish", "egba", "libflutter", "GL", "EGL", "fault", "Exception"
+            )
             lines
-                .filter { l ->
-                    l.contains("signal", true) || l.contains("SIG") || l.contains(".so") ||
-                        l.contains("abort", true) || l.contains("fault", true) ||
-                        l.contains("Thread", true) || l.contains("GL") ||
-                        l.contains("retro", true) || l.contains("mgba", true) ||
-                        l.contains("libc")
-                }
+                .filter { l -> noise.none { l.contains(it) } && useful.any { l.contains(it, true) } }
                 .distinct()
-                .take(25)
-                .joinToString("\n") { it.take(110) }
+                .take(60)
+                .joinToString("\n") { it.take(120) }
         } catch (e: Exception) {
-            ""
+            "(no se pudo leer el informe: " + e.message + ")"
         }
     }
 
@@ -186,6 +190,7 @@ class MainActivity : FlutterActivity() {
                             sb.append(" ").append(last.description ?: "")
                             sb.append("\nAndroid ").append(Build.VERSION.RELEASE)
                             sb.append(" / ").append(Build.SUPPORTED_ABIS.joinToString(","))
+                            sb.append(" / ").append(Build.MANUFACTURER).append(" ").append(Build.MODEL)
                             if (last.reason == 5) {
                                 val t = tombstoneLines(last)
                                 if (t.isNotEmpty()) sb.append("\n\n").append(t)
