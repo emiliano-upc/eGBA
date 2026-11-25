@@ -49,9 +49,22 @@ jobs:
                       useLegacyPackaging = true
                   }
               }
+              buildTypes {
+                  getByName("release") {
+                      isMinifyEnabled = false
+                      isShrinkResources = false
+                      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+                  }
+              }
           }
           EOF
+          cat > app/proguard-rules.pro <<'EOF'
+          -keep class com.swordfish.libretrodroid.** { *; }
+          -keepclassmembers class com.swordfish.libretrodroid.** { *; }
+          -dontwarn com.swordfish.libretrodroid.**
+          EOF
           grep -n -A3 jitpack build.gradle.kts
+          tail -25 app/build.gradle.kts
 
       - name: Descargar motor mGBA
         run: |
@@ -65,7 +78,7 @@ jobs:
         working-directory: app
         run: |
           flutter pub get
-          flutter build apk --release --no-shrink --target-platform android-arm64
+          flutter build apk --release --target-platform android-arm64
 
       - uses: actions/upload-artifact@v4
         with:
